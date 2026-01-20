@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import re
 import io
@@ -27,13 +28,11 @@ GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 _drive_service = None
 _sa_json_path = None
 
-
 def _env(name: str, default: Optional[str] = None) -> str:
     v = os.environ.get(name, default)
     if not v:
         raise RuntimeError(f"Missing env var: {name}")
     return v
-
 
 def extract_file_refs(text: str) -> List[Tuple[str, Optional[str]]]:
     patterns = [
@@ -56,7 +55,6 @@ def extract_file_refs(text: str) -> List[Tuple[str, Optional[str]]]:
             seen.add(x)
     return out
 
-
 def prepare_service_account_file() -> str:
     global _sa_json_path
     if _sa_json_path:
@@ -73,7 +71,6 @@ def prepare_service_account_file() -> str:
     _sa_json_path = path
     return path
 
-
 def get_drive_service():
     global _drive_service
     if _drive_service is not None:
@@ -83,7 +80,6 @@ def get_drive_service():
     creds = Credentials.from_service_account_file(sa_path, scopes=SCOPES)
     _drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
     return _drive_service
-
 
 def export_google_file(file_id: str, resource_key: Optional[str] = None) -> Tuple[bytes, str]:
     drive = get_drive_service()
@@ -109,7 +105,12 @@ def export_google_file(file_id: str, resource_key: Optional[str] = None) -> Tupl
 
     req = drive.files().export_media(fileId=file_id, mimeType=export_mime)
     if request_headers:
-        req.headers.update(request_headers)
+        # req.headers can be None in some googleapiclient versions/requests, update safely
+        if getattr(req, "headers", None):
+            req.headers.update(request_headers)
+        else:
+            req.headers = dict(request_headers)
+
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, req)
     done = False
@@ -120,13 +121,11 @@ def export_google_file(file_id: str, resource_key: Optional[str] = None) -> Tupl
     filename = name if name.lower().endswith(ext) else (name + ext)
     return fh.read(), filename
 
-
 def is_allowed_user(update: Update) -> bool:
     allowed = os.environ.get("ALLOWED_USER_ID", "").strip()
     if not allowed:
         return True
     return update.effective_user and str(update.effective_user.id) == allowed
-
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed_user(update):
@@ -136,13 +135,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Команда /id покажет твой Telegram user_id."
     )
 
-
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed_user(update):
         return
     uid = update.effective_user.id if update.effective_user else "unknown"
     await update.message.reply_text(f"Твой user_id: {uid}")
-
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed_user(update):
@@ -171,7 +168,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Проверь: файл расшарен на service account email, ссылка верная (с resourcekey), Drive API включен."
             )
 
-
 def main():
     bot_token = _env("BOT_TOKEN")
     # На Render эта переменная автоматически содержит https://<service>.onrender.com
@@ -197,7 +193,6 @@ def main():
         webhook_url=webhook_url,
         allowed_updates=Update.ALL_TYPES,
     )
-
 
 if __name__ == "__main__":
     main()
