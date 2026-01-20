@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 from telegram import Update
@@ -110,6 +111,53 @@ def export_google_file(file_id: str) -> Tuple[bytes, str]:
     return fh.read(), filename
 
 
+def parse_http_error_reason(err: HttpError) -> Tuple[Optional[str], Optional[str]]:
+    content = getattr(err, "content", None)
+    if not content:
+        return None, None
+
+    try:
+        if isinstance(content, (bytes, bytearray)):
+            content = content.decode("utf-8", errors="ignore")
+        payload = json.loads(content)
+    except (ValueError, TypeError):
+        return None, None
+
+    error = payload.get("error", {})
+    message = error.get("message")
+    errors = error.get("errors", [])
+    if errors and isinstance(errors, list):
+        reason = errors[0].get("reason")
+        return reason, message
+    return None, message
+
+
+def describe_http_error(err: HttpError) -> str:
+    status = getattr(err.resp, "status", None)
+    reason, message = parse_http_error_reason(err)
+
+    if status == 404:
+        return "Не найден документ по ссылке. Проверь ссылку и доступ."
+    if status == 401:
+        return "Нет доступа к Google Drive. Проверь сервисный аккаунт."
+    if status == 429:
+        return "Слишком много запросов. Попробуй позже."
+    if status in {500, 502, 503, 504}:
+        return "Google Drive временно недоступен. Попробуй позже."
+    if status == 403:
+        if reason in {"insufficientPermissions", "insufficientFilePermissions"}:
+            return "Доступ ограничен. Файл не расшарен на сервисный аккаунт."
+        if reason in {"downloadFileRestricted", "fileNotDownloadable"}:
+            return "Запрет на скачивание. Владелец запретил экспорт."
+        if reason == "exportSizeLimitExceeded":
+            return "Файл слишком большой для экспорта."
+        return "Доступ ограничен или запрещен. Проверь права."
+
+    if message:
+        return f"Ошибка Google Drive: {message}"
+    return "Ошибка Google Drive при обработке файла."
+
+
 def is_allowed_user(update: Update) -> bool:
     allowed = os.environ.get("ALLOWED_USER_ID", "").strip()
     if not allowed:
@@ -140,7 +188,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     file_ids = extract_file_ids(text)
     if not file_ids:
-        await update.message.reply_text("Не вижу ссылки на Google Docs/Sheets. Пришли ссылку.")
+        await update.message.reply_text(
+            "Не найдена ссылка на документ. Пришли ссылку на Google Docs/Sheets."
+        )
         return
 
     for file_id in file_ids:
@@ -151,6 +201,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bio.name = filename
             bio.seek(0)
             await update.message.reply_document(document=bio, filename=filename)
+        except HttpError as he:
+            logging.exception("Failed to export: http error")
+            await update.message.reply_text(describe_http_error(he))
         except ValueError as ve:
             await update.message.reply_text(f"Не поддерживается: {ve}")
         except Exception:
