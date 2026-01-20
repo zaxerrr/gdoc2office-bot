@@ -45,7 +45,7 @@ def extract_file_ids(text: str) -> List[str]:
     ids = []
     for p in patterns:
         ids += re.findall(p, text)
-    # unique keep order
+
     seen = set()
     out = []
     for x in ids:
@@ -62,7 +62,7 @@ def prepare_service_account_file() -> str:
 
     b64 = _env("GOOGLE_SA_JSON_B64")
     raw = base64.b64decode(b64.encode("utf-8"))
-    json.loads(raw.decode("utf-8"))  # quick check it’s JSON
+    json.loads(raw.decode("utf-8"))  # sanity check
 
     path = "/tmp/service_account.json"
     with open(path, "wb") as f:
@@ -153,20 +153,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_document(document=bio, filename=filename)
         except ValueError as ve:
             await update.message.reply_text(f"Не поддерживается: {ve}")
-        except Exception as e:
+        except Exception:
             logging.exception("Failed to export")
             await update.message.reply_text(
                 "Ошибка скачивания/конвертации.\n"
-                "Проверь: файл расшарен на service account email, ссылка верная, Drive API включен.\n"
-                f"Ошибка: {type(e).__name__}"
+                "Проверь: файл расшарен на service account email, ссылка верная, Drive API включен."
             )
 
 
 def main():
     bot_token = _env("BOT_TOKEN")
-    base_url = _env("WEBHOOK_BASE_URL")  # https://xxxx.up.railway.app
-    path = _env("WEBHOOK_PATH")          # случайная строка
+    # На Render эта переменная автоматически содержит https://<service>.onrender.com
+    base_url = os.environ.get("WEBHOOK_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+    if not base_url:
+        raise RuntimeError("Missing WEBHOOK_BASE_URL (or RENDER_EXTERNAL_URL)")
 
+    path = _env("WEBHOOK_PATH")  # любая случайная строка
     port = int(os.environ.get("PORT", "8080"))
 
     app = Application.builder().token(bot_token).build()
