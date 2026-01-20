@@ -12,6 +12,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 from telegram import Update
+from telegram.constants import MessageEntityType
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 logging.basicConfig(level=logging.INFO)
@@ -64,12 +65,22 @@ def extract_google_file_ids_from_message(message) -> List[str]:
     if text:
         sources.append(text)
 
+    caption = (message.caption or "").strip()
+    if caption:
+        sources.append(caption)
+
+    url_entities = message.parse_entities(types=[MessageEntityType.URL]) or {}
+    sources.extend(url_entities.values())
+
+    caption_url_entities = message.parse_caption_entities(types=[MessageEntityType.URL]) or {}
+    sources.extend(caption_url_entities.values())
+
     for entity in message.entities or []:
-        if entity.type == "url":
-            url = message.parse_entity(entity)
-            if url:
-                sources.append(url)
-        elif entity.type == "text_link" and entity.url:
+        if entity.type == MessageEntityType.TEXT_LINK and entity.url:
+            sources.append(entity.url)
+
+    for entity in message.caption_entities or []:
+        if entity.type == MessageEntityType.TEXT_LINK and entity.url:
             sources.append(entity.url)
 
     seen = set()
@@ -200,7 +211,7 @@ def main():
     app = Application.builder().token(bot_token).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("id", cmd_id))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_text))
 
     webhook_url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
     logging.info("Webhook URL: %s", webhook_url)
