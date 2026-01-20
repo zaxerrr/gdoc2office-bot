@@ -55,6 +55,33 @@ def extract_file_ids(text: str) -> List[str]:
     return out
 
 
+def extract_google_file_ids_from_message(message) -> List[str]:
+    if not message:
+        return []
+
+    sources = []
+    text = (message.text or "").strip()
+    if text:
+        sources.append(text)
+
+    for entity in message.entities or []:
+        if entity.type == "url":
+            url = message.parse_entity(entity)
+            if url:
+                sources.append(url)
+        elif entity.type == "text_link" and entity.url:
+            sources.append(entity.url)
+
+    seen = set()
+    ids: List[str] = []
+    for source in sources:
+        for file_id in extract_file_ids(source):
+            if file_id not in seen:
+                seen.add(file_id)
+                ids.append(file_id)
+    return ids
+
+
 def prepare_service_account_file() -> str:
     global _sa_json_path
     if _sa_json_path:
@@ -137,8 +164,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed_user(update):
         return
 
-    text = (update.message.text or "").strip()
-    file_ids = extract_file_ids(text)
+    file_ids = extract_google_file_ids_from_message(update.message)
     if not file_ids:
         await update.message.reply_text("Не вижу ссылки на Google Docs/Sheets. Пришли ссылку.")
         return
