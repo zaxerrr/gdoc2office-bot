@@ -36,13 +36,6 @@ def _env(name: str, default: Optional[str] = None) -> str:
 
 
 def extract_file_ids(text: str) -> List[str]:
-    """
-    Поддерживаем популярные форматы ссылок:
-    - https://docs.google.com/document/d/<id>/...
-    - https://docs.google.com/spreadsheets/d/<id>/...
-    - https://drive.google.com/file/d/<id>/...
-    - https://drive.google.com/open?id=<id>
-    """
     patterns = [
         r"/document/d/([a-zA-Z0-9_-]+)",
         r"/spreadsheets/d/([a-zA-Z0-9_-]+)",
@@ -52,7 +45,6 @@ def extract_file_ids(text: str) -> List[str]:
     ids = []
     for p in patterns:
         ids += re.findall(p, text)
-
     # unique keep order
     seen = set()
     out = []
@@ -64,10 +56,6 @@ def extract_file_ids(text: str) -> List[str]:
 
 
 def prepare_service_account_file() -> str:
-    """
-    Railway удобно хранить ключ в GOOGLE_SA_JSON_B64.
-    Декодируем в /tmp/service_account.json и используем как файл.
-    """
     global _sa_json_path
     if _sa_json_path:
         return _sa_json_path
@@ -96,9 +84,6 @@ def get_drive_service():
 
 
 def export_google_file(file_id: str) -> Tuple[bytes, str]:
-    """
-    Скачивает Google Docs/Sheets через Drive API export и возвращает (bytes, filename)
-    """
     drive = get_drive_service()
     meta = drive.files().get(fileId=file_id, fields="name,mimeType").execute()
     name = meta.get("name", "file")
@@ -115,4 +100,91 @@ def export_google_file(file_id: str) -> Tuple[bytes, str]:
 
     req = drive.files().export_media(fileId=file_id, mimeType=export_mime)
     fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, re
+    downloader = MediaIoBaseDownload(fh, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    fh.seek(0)
+    filename = name if name.lower().endswith(ext) else (name + ext)
+    return fh.read(), filename
+
+
+def is_allowed_user(update: Update) -> bool:
+    allowed = os.environ.get("ALLOWED_USER_ID", "").strip()
+    if not allowed:
+        return True
+    return update.effective_user and str(update.effective_user.id) == allowed
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed_user(update):
+        return
+    await update.message.reply_text(
+        "Пришли ссылку на Google Docs или Google Sheets — верну DOCX/XLSX.\n"
+        "Команда /id покажет твой Telegram user_id."
+    )
+
+
+async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed_user(update):
+        return
+    uid = update.effective_user.id if update.effective_user else "unknown"
+    await update.message.reply_text(f"Твой user_id: {uid}")
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed_user(update):
+        return
+
+    text = (update.message.text or "").strip()
+    file_ids = extract_file_ids(text)
+    if not file_ids:
+        await update.message.reply_text("Не вижу ссылки на Google Docs/Sheets. Пришли ссылку.")
+        return
+
+    for file_id in file_ids:
+        try:
+            await update.message.reply_text("Конвертирую и скачиваю…")
+            data, filename = await asyncio.to_thread(export_google_file, file_id)
+            bio = io.BytesIO(data)
+            bio.name = filename
+            bio.seek(0)
+            await update.message.reply_document(document=bio, filename=filename)
+        except ValueError as ve:
+            await update.message.reply_text(f"Не поддерживается: {ve}")
+        except Exception as e:
+            logging.exception("Failed to export")
+            await update.message.reply_text(
+                "Ошибка скачивания/конвертации.\n"
+                "Проверь: файл расшарен на service account email, ссылка верная, Drive API включен.\n"
+                f"Ошибка: {type(e).__name__}"
+            )
+
+
+def main():
+    bot_token = _env("BOT_TOKEN")
+    base_url = _env("WEBHOOK_BASE_URL")  # https://xxxx.up.railway.app
+    path = _env("WEBHOOK_PATH")          # случайная строка
+
+    port = int(os.environ.get("PORT", "8080"))
+
+    app = Application.builder().token(bot_token).build()
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("id", cmd_id))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    webhook_url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    logging.info("Webhook URL: %s", webhook_url)
+
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=path,
+        webhook_url=webhook_url,
+        allowed_updates=Update.ALL_TYPES,
+    )
+
+
+if __name__ == "__main__":
+    main()
