@@ -135,6 +135,19 @@ def parse_http_error_reason(err: HttpError) -> Tuple[Optional[str], Optional[str
 def describe_http_error(err: HttpError) -> str:
     status = getattr(err.resp, "status", None)
     reason, message = parse_http_error_reason(err)
+    reason_map = {
+        "insufficientPermissions": "Доступ ограничен. Файл не расшарен на сервисный аккаунт.",
+        "insufficientFilePermissions": "Доступ ограничен. Файл не расшарен на сервисный аккаунт.",
+        "appNotAuthorizedToFile": "Приложение не авторизовано для файла. Нужен доступ сервисного аккаунта.",
+        "downloadFileRestricted": "Запрет на скачивание. Владелец запретил экспорт.",
+        "fileNotDownloadable": "Запрет на скачивание. Владелец запретил экспорт.",
+        "exportSizeLimitExceeded": "Файл слишком большой для экспорта.",
+        "cannotDownloadAbusiveFile": "Google заблокировал скачивание файла как потенциально опасного.",
+        "userRateLimitExceeded": "Слишком много запросов. Попробуй позже.",
+        "rateLimitExceeded": "Слишком много запросов. Попробуй позже.",
+        "sharingRateLimitExceeded": "Превышен лимит общего доступа. Попробуй позже.",
+        "quotaExceeded": "Превышена квота Google Drive. Попробуй позже.",
+    }
 
     if status == 404:
         return "Не найден документ по ссылке. Проверь ссылку и доступ."
@@ -145,17 +158,24 @@ def describe_http_error(err: HttpError) -> str:
     if status in {500, 502, 503, 504}:
         return "Google Drive временно недоступен. Попробуй позже."
     if status == 403:
-        if reason in {"insufficientPermissions", "insufficientFilePermissions"}:
-            return "Доступ ограничен. Файл не расшарен на сервисный аккаунт."
-        if reason in {"downloadFileRestricted", "fileNotDownloadable"}:
-            return "Запрет на скачивание. Владелец запретил экспорт."
-        if reason == "exportSizeLimitExceeded":
-            return "Файл слишком большой для экспорта."
+        if reason in reason_map:
+            return reason_map[reason]
         return "Доступ ограничен или запрещен. Проверь права."
+    if status == 400 and reason in reason_map:
+        return reason_map[reason]
 
     if message:
         return f"Ошибка Google Drive: {message}"
     return "Ошибка Google Drive при обработке файла."
+
+
+def describe_value_error(err: ValueError) -> str:
+    message = str(err)
+    if message.startswith("Unsupported mimeType:"):
+        return (
+            "Формат файла не поддерживается. Подходят только Google Docs и Google Sheets."
+        )
+    return f"Ошибка обработки: {message}"
 
 
 def is_allowed_user(update: Update) -> bool:
@@ -205,7 +225,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.exception("Failed to export: http error")
             await update.message.reply_text(describe_http_error(he))
         except ValueError as ve:
-            await update.message.reply_text(f"Не поддерживается: {ve}")
+            await update.message.reply_text(describe_value_error(ve))
         except Exception:
             logging.exception("Failed to export")
             await update.message.reply_text(
